@@ -1,0 +1,1 @@
+python tools/pytorch2trt.py configs/top_down/lite_hrnet/coco/litehrnet_18_coco_256x192_trt.py --shape 1280 736 

@@ -4,8 +4,11 @@ import argparse
 from mmcv import Config
 # from mmcv.cnn import get_model_complexity_info
 from torchstat_utils import model_stats
-
+import torch
+import tensorrt as trt
+from torch2trt import torch2trt
 import sys
+
 sys.path.append('.')
 from models import build_posenet
 
@@ -18,9 +21,18 @@ def parse_args():
                         nargs='+',
                         default=[2048, 1024],
                         help='input image size')
-    parser.add_argument('--out-file', type=str, help='Output file name')
+    parser.add_argument('--out',
+                        type=str,
+                        default="hrnet_lite.plan",
+                        help='Output file name')
+
     args = parser.parse_args()
     return args
+
+
+def save_engine(model, name='test.engine'):
+    with open(name, 'wb') as f:
+        f.write(model.engine.serialize())
 
 
 def main():
@@ -48,19 +60,25 @@ def main():
             'FLOPs counter is currently not currently supported with {}'.
             format(model.__class__.__name__))
 
-    df = model_stats(model, input_shape)
-    print(df)
-    if args.out_file:
-        df.to_html(args.out_file + '.html')
-        df.to_csv(args.out_file + '.csv')
+    x = torch.rand(input_shape,
+                   dtype=next(model.parameters()).dtype,
+                   device=next(model.parameters()).device).cuda()
 
-    # flops, params = get_model_complexity_info(model, input_shape)
-    # split_line = '=' * 30
-    # print('{0}\nInput shape: {1}\nFlops: {2}\nParams: {3}\n{0}'.format(
-    #     split_line, input_shape, flops, params))
-    print('!!!Please be cautious if you use the results in papers. '
-          'You may need to check if all ops are supported and verify that the '
-          'flops computation is correct.')
+    with torch.no_grad():
+        model_trt = torch2trt(
+            model.cuda(),
+            [x],
+            log_level=trt.Logger.INFO,  #max_workspace_size= (2<<30),
+            input_names=["input"],
+            output_names=["output"])
+
+        print(f'saving model in {args.out}')
+        save_engine(model_trt, args.out)
+
+        y = model(x)
+        y_trt = model_trt(x)
+        for y0, y1 in zip(y, y_trt):
+            print(y0.shape, y1.shape, torch.max(torch.abs(y0 - y1)))
 
 
 if __name__ == '__main__':
